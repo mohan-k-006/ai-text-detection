@@ -25,7 +25,6 @@ except ImportError:
 
 
 class PlagiarismDetectionView(APIView):
-    permission_classes = [IsAuthenticated]
     # Allow both JSON (for direct text input) and MultiPart/Form (for file uploads)
     parser_classes = [JSONParser, MultiPartParser, FormParser]
 
@@ -183,7 +182,7 @@ class AIDetectionView(APIView):
     parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     # Define the URL for your Flask AI detection API
-    FLASK_AI_API_URL = "https://e97d52498afa.ngrok-free.app/check-ai/"
+    FLASK_AI_API_URL = "http://127.0.0.1:5000/api/ai-check"  # Unga local AI service address
 
     def post(self, request, format=None):
         text_content = None # Initialize text_content to None
@@ -270,7 +269,7 @@ class HumanizeTextView(APIView):
     permission_classes = [IsAuthenticated] # Uncomment this when ready for authentication
     # Allow both JSON (for direct text input) and MultiPart/Form (for file uploads)
     parser_classes = [JSONParser, MultiPartParser, FormParser]
-    FLASK_HUMANIZE_API_URL = "https://e97d52498afa.ngrok-free.app/humanize/" # Example: Adjust if using ngrok
+    FLASK_HUMANIZE_API_URL = "http://127.0.0.1:5000/api/humanize"
 
     def post(self, request, format=None):
         text_content = None # Initialize text_content to None

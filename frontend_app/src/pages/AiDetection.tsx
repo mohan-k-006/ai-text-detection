@@ -38,7 +38,8 @@ export default function AIDetection() {
     setInputText("");
   };
 
-  const handleAnalyze = async () => {
+  const handleAnalyze = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!inputText.trim() && !selectedFile) return;
 
     setIsAnalyzing(true);
@@ -47,16 +48,28 @@ export default function AIDetection() {
 
     try {
       let response;
+      const token = localStorage.getItem("access") || 
+                    localStorage.getItem("token") || 
+                    localStorage.getItem("access_token") || 
+                    localStorage.getItem("authToken") ||
+                    localStorage.getItem("userToken");
 
       if (selectedFile) {
         const formData = new FormData();
         formData.append("file", selectedFile);
         response = await instance.post("ai-check/", formData, {
-          headers: { "Content-Type": "multipart/form-data" }
+          headers: { 
+            "Content-Type": "multipart/form-data",
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          }
         });
       } else {
         response = await instance.post("ai-check/", {
           text_content: inputText.trim()
+        }, {
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          }
         });
       }
 
@@ -96,11 +109,10 @@ export default function AIDetection() {
     let yOffset = 70;
     results.sentences.forEach((s: any, i: number) => {
       const line = `${i + 1}. [${s.isAI ? "AI" : "Human"} - ${s.confidence}%] ${s.text}`;
-      const lines = doc.splitTextToSize(line, 180); // wrap text
+      const lines = doc.splitTextToSize(line, 180);
       doc.text(lines, 10, yOffset);
       yOffset += lines.length * 10;
 
-       // Handle page break
       if (yOffset > 280) {
         doc.addPage();
         yOffset = 20;
@@ -170,6 +182,7 @@ export default function AIDetection() {
                         {inputText.length} / 5000 characters
                       </span>
                       <Button 
+                        type="button"
                         onClick={handleAnalyze}
                         disabled={(!inputText.trim() && !selectedFile) || isAnalyzing}
                         variant="hero"
@@ -244,55 +257,13 @@ export default function AIDetection() {
                             </div>
                           ))}
                         </div>
-                        <Button variant="outline" className="w-full" onClick={handleDownloadReport}>
+                        <Button type="button" variant="outline" className="w-full" onClick={handleDownloadReport}>
                           Download Detailed Report
                         </Button>
                       </div>
                     )}
                   </CardContent>
                 </Card>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="py-16 bg-muted/30">
-          <div className="container mx-auto px-4">
-            <div className="text-center mb-12">
-              <h2 className="text-3xl font-bold text-foreground mb-4">
-                Why Choose Our AI Detection?
-              </h2>
-              <p className="text-muted-foreground max-w-2xl mx-auto">
-                Advanced algorithms trained on the latest AI models for maximum accuracy.
-              </p>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-4xl mx-auto">
-              <div className="text-center">
-                <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center mx-auto mb-4">
-                  <Bot className="w-6 h-6 text-primary" />
-                </div>
-                <h3 className="font-semibold text-foreground mb-2">99.8% Accuracy</h3>
-                <p className="text-sm text-muted-foreground">
-                  Industry-leading detection rates across all major AI models
-                </p>
-              </div>
-              <div className="text-center">
-                <div className="w-12 h-12 bg-secondary/10 rounded-xl flex items-center justify-center mx-auto mb-4">
-                  <CheckCircle className="w-6 h-6 text-secondary" />
-                </div>
-                <h3 className="font-semibold text-foreground mb-2">Real-time Analysis</h3>
-                <p className="text-sm text-muted-foreground">
-                  Get instant results with detailed confidence scores
-                </p>
-              </div>
-              <div className="text-center">
-                <div className="w-12 h-12 bg-success/10 rounded-xl flex items-center justify-center mx-auto mb-4">
-                  <Download className="w-6 h-6 text-success" />
-                </div>
-                <h3 className="font-semibold text-foreground mb-2">Detailed Reports</h3>
-                <p className="text-sm text-muted-foreground">
-                  Comprehensive analysis with sentence-level breakdowns
-                </p>
               </div>
             </div>
           </div>

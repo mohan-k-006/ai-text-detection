@@ -47,7 +47,8 @@ const SignIn = () => {
     setIsLoading(true);
 
     try {
-      const response = await fetch("http://localhost:8000/api/login/", {
+      // Updated to match /api/auth/login/ route in backend urls.py
+      const response = await fetch("http://localhost:8000/api/auth/login/", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -71,7 +72,7 @@ const SignIn = () => {
       } else {
         toast({
           title: "Login Failed",
-          description: result.error || "Invalid credentials",
+          description: result.non_field_errors?.[0] || result.error || "Invalid credentials",
           variant: "destructive",
         });
       }

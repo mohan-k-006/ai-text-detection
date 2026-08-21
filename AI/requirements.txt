@@ -8,3 +8,8 @@ google-generativeai
 joblib
 python-dotenv
 scikit-learn==1.6.1
+pip install flask transformers torch scikit-learn joblib python-dotenv nltk textstat
+pip install google-generativeai
+python -c "import nltk; nltk.download('punkt_tab'); nltk.download('punkt')"
+python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng'); nltk.download('punkt'); nltk.download('punkt_tab')"
+python -c "import nltk; nltk.download('stopwords')"

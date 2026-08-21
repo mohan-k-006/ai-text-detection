@@ -2,11 +2,14 @@ from flask import Flask, request, jsonify
 from nltk import word_tokenize, pos_tag
 from nltk.corpus import stopwords
 from transformers import GPT2Tokenizer, GPT2LMHeadModel, pipeline, set_seed
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import google.generativeai as genai
 import torch, textstat, re
 import numpy as np
 import os
+import statistics
 import nltk
+stop_words = set(stopwords.words('english'))
 from joblib import load
 from dotenv import load_dotenv
 # Load environment variables
@@ -22,6 +25,19 @@ clf = load(MODEL_PATH)
 tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 gpt2_model = GPT2LMHeadModel.from_pretrained("gpt2")
 gpt2_model.eval()
+
+# Load a real pretrained AI-text-detector transformer model (replaces weak handcrafted features)
+detector_tokenizer = AutoTokenizer.from_pretrained("Hello-SimpleAI/chatgpt-detector-roberta")
+detector_model = AutoModelForSequenceClassification.from_pretrained("Hello-SimpleAI/chatgpt-detector-roberta")
+detector_model.eval()
+
+def detect_ai_sentence(sentence):
+    """Returns probability (0-1) that the sentence is AI-generated, using a fine-tuned transformer."""
+    inputs = detector_tokenizer(sentence, return_tensors="pt", truncation=True, max_length=512)
+    with torch.no_grad():
+        logits = detector_model(**inputs).logits
+    probs = torch.softmax(logits, dim=1)[0]
+    return probs[1].item()
 
 # Load Gemini Api key into model
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -62,6 +78,27 @@ def split_sentences(text):
     return [s.strip() for s in sentences if s.strip()]
 
 
+def chunk_sentences(sentences, chunk_size=3):
+    """Group sentences into chunks for more context per prediction."""
+    if len(sentences) <= chunk_size:
+        return [" ".join(sentences)] if sentences else []
+    chunks = []
+    for i in range(0, len(sentences), chunk_size):
+        chunk = sentences[i:i + chunk_size]
+        chunks.append(" ".join(chunk))
+    return chunks
+
+
+def normalize_perplexity(perplexity):
+    """
+    Lower perplexity = more predictable = more likely AI-generated.
+    Maps perplexity to a 0-1 'AI-likelihood' score (inverse relationship).
+    """
+    capped = max(5.0, min(perplexity, 120.0))
+    ai_score_from_perplexity = 1.0 - ((capped - 5.0) / (120.0 - 5.0))
+    return ai_score_from_perplexity
+
+
 def rewrite_sentence(sentence):
     # Aggressively refined prompt to get ONLY the single rewritten sentence
     prompt = (
@@ -75,47 +112,39 @@ def rewrite_sentence(sentence):
 
     try:
         model = genai.GenerativeModel("gemini-2.0-flash")
-        # Added temperature for a bit more creativity, which can help with naturalness
         response = model.generate_content(prompt, generation_config={"temperature": 0.7})
 
         rewritten_raw = response.text.strip()
 
-        # --- START OF ROBUST POST-PROCESSING ---
-
-        # 1. Remove common LLM introductory phrases, possibly followed by quotes
         rewritten = re.sub(
             r"^(Here's the rewritten sentence:|Rewritten sentence:|Here's one way to rewrite it:|Here's how I'd rewrite it:|Here's a rewritten version:|Here is the rewritten sentence:|I would rewrite it as:)?\s*[\"']?",
             "", rewritten_raw, flags=re.IGNORECASE
         ).strip()
 
-        # 2. Remove trailing quotes if the LLM wrapped it in quotes
         if rewritten.endswith('"'):
             rewritten = rewritten[:-1].strip()
 
-        # 3. If the LLM still provided multiple lines (e.g., options, explanations), take only the first one
         rewritten_lines = rewritten.split('\n')
         if rewritten_lines:
             rewritten = rewritten_lines[0].strip()
         else:
-            rewritten = sentence # Fallback if no useful line is extracted
+            rewritten = sentence
 
-        # 4. Final cleanup: remove markdown bold/italic, collapse multiple spaces, remove blockquote symbols
-        rewritten = re.sub(r'\*{1,2}', '', rewritten).strip() # Remove markdown bold/italic
-        rewritten = re.sub(r' {2,}', ' ', rewritten) # Collapse multiple spaces
-        rewritten = re.sub(r'>\s*', '', rewritten) # Remove blockquote character if any
+        rewritten = re.sub(r'\*{1,2}', '', rewritten).strip()
+        rewritten = re.sub(r' {2,}', ' ', rewritten)
+        rewritten = re.sub(r'>\s*', '', rewritten)
         if len(rewritten) <= 5 or rewritten.lower() == sentence.lower():
             return sentence
 
-        # --- END OF ROBUST POST-PROCESSING ---
         return rewritten
     except Exception as e:
         print(f"Rewrite error: {e}")
-        return sentence # Fallback to original sentence on error
+        return sentence
 
 
 # --- API Route ---
 
-@app.route("/check-ai/", methods=["POST"])
+@app.route("/api/ai-check", methods=["POST"])
 def detect_ai():
     data = request.get_json()
     text = data.get("text", "")
@@ -123,32 +152,68 @@ def detect_ai():
         return jsonify({"error": "No input text provided"}), 400
 
     sentences = split_sentences(text)
+    if not sentences:
+        return jsonify({"error": "No valid sentences found"}), 400
+
+    # --- Chunk-level analysis (more context than single short sentences) ---
+    chunks = chunk_sentences(sentences, chunk_size=3)
+    chunk_scores = []
+    perplexities = []
+
+    for chunk in chunks:
+        transformer_prob = detect_ai_sentence(chunk)
+        chunk_perplexity = get_perplexity(chunk)
+        perplexities.append(chunk_perplexity)
+        perplexity_score = normalize_perplexity(chunk_perplexity)
+        blended_chunk_score = (0.7 * transformer_prob) + (0.3 * perplexity_score)
+        chunk_scores.append(blended_chunk_score)
+
+    # --- Burstiness: human writing varies more in sentence complexity ---
+    burstiness_bonus = 0.0
+    if len(perplexities) > 1:
+        stdev = statistics.stdev(perplexities)
+        mean_perp = statistics.mean(perplexities)
+        coefficient_of_variation = stdev / mean_perp if mean_perp > 0 else 0
+        if coefficient_of_variation < 0.15:
+            burstiness_bonus = 0.05
+
+    # --- Sentence-level breakdown (for UI display) ---
+    results = []
     ai_sentences = []
     borderline_sentences = []
-    results = []
-
     for sentence in sentences:
-        features = extract_features(sentence)
-        prob = clf.predict_proba([features])[0][1]
-
+        prob = detect_ai_sentence(sentence)
         label = "AI-Generated" if prob >= 0.65 else "Human-Written"
         if prob >= 0.65:
             ai_sentences.append(sentence)
         elif 0.4 < prob < 0.65:
             borderline_sentences.append(sentence)
-
         results.append({
             "sentence": sentence,
             "ai_probability": round(prob, 2),
             "label": label
         })
 
-    ai_percentage = round(len(ai_sentences) / len(sentences) * 100, 2) if sentences else 0.0
+    # --- Document-level score (full text as one chunk) ---
+    doc_prob = detect_ai_sentence(text)
+    doc_perplexity = get_perplexity(text)
+    doc_perplexity_score = normalize_perplexity(doc_perplexity)
+    doc_blended = (0.7 * doc_prob) + (0.3 * doc_perplexity_score)
+
+    # --- Final combined score ---
+    avg_chunk_score = sum(chunk_scores) / len(chunk_scores) if chunk_scores else 0.0
+    final_score = (0.5 * doc_blended) + (0.5 * avg_chunk_score) + burstiness_bonus
+    final_score = max(0.0, min(1.0, final_score))
+
+    ai_percentage = round(final_score * 100, 2)
 
     return jsonify({
         "total_sentences": len(sentences),
         "ai_sentences_count": len(ai_sentences),
         "ai_percentage": ai_percentage,
+        "document_level_score": round(doc_blended * 100, 2),
+        "chunk_avg_score": round(avg_chunk_score * 100, 2),
+        "burstiness_bonus_applied": burstiness_bonus > 0,
         "ai_sentences": ai_sentences,
         "borderline_sentences": borderline_sentences,
         "sentence_predictions": results
@@ -166,10 +231,9 @@ def humanize_text():
     rewritten_sentences = []
 
     for sentence in sentences:
-        features = extract_features(sentence)
-        prediction = clf.predict([features])[0]
+        prob = detect_ai_sentence(sentence)
 
-        if prediction == 1:
+        if prob >= 0.65:
             ai_sentences.append(sentence)
 
         rewritten = rewrite_sentence(sentence)
